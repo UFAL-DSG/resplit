@@ -38,14 +38,13 @@ default_vad_cfg = {
 
 
 class RecordingSplitter(object):
+    CHANGE_TO_NON_SPEECH = 2
+    CHANGE_TO_SPEECH = 1
+
     speech_thresh = 0.7
     non_speech_thresh = 0.1
 
     read_buffer_size = 128
-
-    CHANGE_TO_NON_SPEECH = 2
-    CHANGE_TO_SPEECH = 1
-
 
     def __init__(self, vad_cfg, speech_thresh=0.7, non_speech_thresh=0.1):
         self.vad_cfg = vad_cfg
@@ -173,9 +172,6 @@ def main(input_dir, pcm_sample_rate, output_dir, v):
     rs = RecordingSplitter(vad_cfg=vad_cfg)
 
     _split_files(rs, output_dir, to_process, pcm_sample_rate)
-
-
-
 
 
 def _download_vad_model_if_not_exists(vad_cfg):
