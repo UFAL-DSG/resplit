@@ -104,8 +104,8 @@ class RecordingSplitter(object):
             if is_speech:
                 frames.append(audio_data)
 
-
-        self._save_part(res_file_cntr, frames, out_dir, res_files, wave_in, out_prefix, n_read_beg, n_read, bytes_per_second)
+        if n_read_beg:
+            self._save_part(res_file_cntr, frames, out_dir, res_files, wave_in, out_prefix, n_read_beg, n_read, bytes_per_second)
 
         return res_files
 
