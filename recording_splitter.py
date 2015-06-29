@@ -195,7 +195,7 @@ def _find_files_to_split(input_dir):
     for root, dirs, files in os.walk(input_dir):
         for file_name in files:
             if file_name.endswith('.pcm'):
-                to_process.append((file_name, root))
+                to_process.append((file_name, os.path.relpath(root, start=input_dir)))
     return to_process
 
 
@@ -203,6 +203,7 @@ def _split_files(rs, output_dir, to_process, pcm_sample_rate):
     logging.info('Processing files.')
     for file_name, root in to_process:
         file_out_dir = os.path.join(output_dir, root, file_name)
+        print output_dir, file_name, root, file_out_dir
         files = _split_2chan_pcm(rs, file_name, file_out_dir, pcm_sample_rate, root)
         _create_session_xml(file_out_dir, files)
 
