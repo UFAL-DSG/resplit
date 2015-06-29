@@ -184,8 +184,8 @@ def _mkdir_if_not_exists(output_dir):
 def _download_vad_model_if_not_exists(vad_cfg):
     if not os.path.exists(vad_cfg['model']):
         os.system('wget "%s"' % (
-        'wget https://vystadial.ms.mff.cuni.cz/download/alex/resources/vad'
-        '/voip/%s' %
+        'wget "https://vystadial.ms.mff.cuni.cz/download/alex/resources/vad'
+        '/voip/%s"' %
         vad_cfg['model'], ))
 
 
