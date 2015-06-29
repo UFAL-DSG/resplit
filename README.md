@@ -6,4 +6,4 @@ The input directory structure is preserved under the output directory, where eac
 
 # Usage
 
-  python recording_splitter.py where/is/input_dir where/is/output_dir
+    python recording_splitter.py where/is/input_dir where/is/output_dir
