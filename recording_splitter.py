@@ -163,6 +163,8 @@ def main(input_dir, pcm_sample_rate, output_dir, v):
     else:
         logging.basicConfig(format=LOGGING_FORMAT)
 
+    _mkdir_if_not_exists(output_dir)
+
     logging.info('Starting.')
     to_process = _find_files_to_split(input_dir)
 
@@ -172,6 +174,11 @@ def main(input_dir, pcm_sample_rate, output_dir, v):
     rs = RecordingSplitter(vad_cfg=vad_cfg)
 
     _split_files(rs, output_dir, to_process, pcm_sample_rate)
+
+
+def _mkdir_if_not_exists(output_dir):
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
 
 def _download_vad_model_if_not_exists(vad_cfg):
