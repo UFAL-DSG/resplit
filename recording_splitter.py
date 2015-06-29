@@ -1,11 +1,15 @@
-import collections
+# TODO: Session XML header cfg.
+
+from collections import deque
 import os
 import wave
 import logging
 
 from fnnvad import FFNNVAD
 
+
 LOGGING_FORMAT = '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
+
 
 default_vad_cfg = {
     'framesize': 512,
@@ -34,59 +38,39 @@ default_vad_cfg = {
 
 
 class RecordingSplitter(object):
-    SAMPLE_RATE = 8000
-    SAMPLE_WIDTH = 2
-    READ_BUFFER_SIZE = 128
-    BYTES_PER_SECOND = SAMPLE_RATE * SAMPLE_WIDTH
+    speech_thresh = 0.7
+    non_speech_thresh = 0.1
 
-    FRAMES_PER_SECOND = BYTES_PER_SECOND / READ_BUFFER_SIZE
-
-    PRE_DETECTION_BUFFER_FRAMES = int(FRAMES_PER_SECOND * 0.5)
-    SMOOTHE_DECISION_WINDOW_SIL = int(FRAMES_PER_SECOND * 0.2)
-    SMOOTHE_DECISION_WINDOW_SPEECH = int(FRAMES_PER_SECOND * 0.2)
-    DECISION_SPEECH_THRESHOLD = 0.7
-    DECISION_NON_SPEECH_THRESHOLD = 0.1
+    read_buffer_size = 128
 
     CHANGE_TO_NON_SPEECH = 2
     CHANGE_TO_SPEECH = 1
 
 
-    def __init__(self, vad_cfg, sample_rate):
-        assert vad_cfg['sample_rate'] == sample_rate, 'Sample rates for VAD and the recording must match!'
+    def __init__(self, vad_cfg, speech_thresh=0.7, non_speech_thresh=0.1):
         self.vad_cfg = vad_cfg
-        self.SAMPLE_RATE = sample_rate
+
+        self.speech_thresh = speech_thresh
+        self.non_speech_thresh = non_speech_thresh
 
         logging.info('Loading VAD model.')
         self.vad = FFNNVAD(**vad_cfg)
 
-
-    def convert_to_wav(self, in_file, out_file, chan):
-        os.system('sox -e signed-integer -b 16 -r %d -c 2 -t raw "%s" "%s" remix %d' % (self.SAMPLE_RATE, in_file, out_file, chan, ))
-
-    def split_pcm(self, file_name, root, out_base):
-        file_path = os.path.join(root, file_name)
-        out_dir = os.path.join(out_base, root, file_name)
-
-        if not os.path.exists(out_dir):
-            os.makedirs(out_dir)
-
-        wav_path_a = os.path.join(out_dir, 'all.a.wav')
-        wav_path_b = os.path.join(out_dir, 'all.b.wav')
-        self.convert_to_wav(file_path, wav_path_a, 1)
-        self.convert_to_wav(file_path, wav_path_b, 2)
-
-        res_files1 = self.split_single_channel_wav(wav_path_a, out_dir, "a")
-        res_files2 = self.split_single_channel_wav(wav_path_b, out_dir, "b")
-
-        res = res_files1 + res_files2
-        res.sort(key=lambda ((tb, te, ), fn, ): tb)
-
-        return res
-
     def split_single_channel_wav(self, file_name, out_dir, out_prefix):
         logging.info('Splitting %s' % file_name)
-
         wave_in = wave.open(file_name)
+
+        sample_rate = wave_in.getframerate()
+        sample_width = wave_in.getsampwidth()
+
+        bytes_per_second = sample_rate * sample_width
+
+        frames_per_second = bytes_per_second / self.read_buffer_size
+
+        (detection_window_sil,
+         detection_window_speech,
+         pre_detection_buffer) = self._initialize_buffers(frames_per_second)
+
         res_files = []
         res_file_cntr = 0
 
@@ -96,13 +80,9 @@ class RecordingSplitter(object):
         n_read = 0
         n_read_beg = None
 
-        detection_window_speech = collections.deque(maxlen=self.SMOOTHE_DECISION_WINDOW_SPEECH)
-        detection_window_sil = collections.deque(maxlen=self.SMOOTHE_DECISION_WINDOW_SIL)
-        pre_detection_buffer = collections.deque(maxlen=self.PRE_DETECTION_BUFFER_FRAMES)
-
         while 1:
-            audio_data = wave_in.readframes(self.READ_BUFFER_SIZE)
-            n_read += self.READ_BUFFER_SIZE
+            audio_data = wave_in.readframes(self.read_buffer_size)
+            n_read += self.read_buffer_size
 
             if len(audio_data) == 0:
                 break
@@ -114,23 +94,32 @@ class RecordingSplitter(object):
                 pre_detection_buffer.append(audio_data)
 
             if change == self.CHANGE_TO_SPEECH:
-                n_read_beg = n_read - self.READ_BUFFER_SIZE
+                n_read_beg = n_read - self.read_buffer_size
                 frames = []
             elif change == self.CHANGE_TO_NON_SPEECH:
                 #if not is_speech and len(frames) > 1:
-                self._save_part(res_file_cntr, list(pre_detection_buffer) + frames, out_dir, res_files, wave_in, out_prefix, n_read_beg, n_read)
+                self._save_part(res_file_cntr, list(pre_detection_buffer) + frames, out_dir, res_files, wave_in, out_prefix, n_read_beg, n_read, bytes_per_second)
                 res_file_cntr += 1
-                pre_detection_buffer.extend(frames[-self.PRE_DETECTION_BUFFER_FRAMES:])
+                pre_detection_buffer.extend(frames[-pre_detection_buffer.maxlen:])
 
             if is_speech:
                 frames.append(audio_data)
 
-            if res_file_cntr > 1:
-                break
 
-        self._save_part(res_file_cntr, frames, out_dir, res_files, wave_in, out_prefix, n_read_beg, n_read)
+        self._save_part(res_file_cntr, frames, out_dir, res_files, wave_in, out_prefix, n_read_beg, n_read, bytes_per_second)
 
         return res_files
+
+    def _initialize_buffers(self, frames_per_second):
+        pre_detection_buffer_frames = int(frames_per_second * 0.5)
+        smoothe_decision_window_sil = int(frames_per_second * 0.2)
+        smoothe_decision_window_speech = int(frames_per_second * 0.2)
+
+        detection_window_speech = deque(maxlen=smoothe_decision_window_speech)
+        detection_window_sil = deque(maxlen=smoothe_decision_window_sil)
+        pre_detection_buffer = deque(maxlen=pre_detection_buffer_frames)
+
+        return detection_window_sil, detection_window_speech, pre_detection_buffer
 
 
     def _smoothe_decison(self, decision, last_vad, detection_window_speech, detection_window_sil):
@@ -144,35 +133,32 @@ class RecordingSplitter(object):
         change = None
         if last_vad:
             # last decision was speech
-            if sil < self.DECISION_NON_SPEECH_THRESHOLD:
+            if sil < self.non_speech_thresh:
                 vad = False
                 change = self.CHANGE_TO_NON_SPEECH
         else:
-            if speech > self.DECISION_SPEECH_THRESHOLD:
+            if speech > self.speech_thresh:
                 vad = True
                 change = self.CHANGE_TO_SPEECH
 
         return vad, change
 
-
-
-
-    def _save_part(self, cntr, frames, out_dir, res_files, wave_in, out_prefix, n_read_beg, n_read_end):
-        logging.info('Saving part %d (%d frames).' % (cntr, len(frames)))
+    def _save_part(self, cntr, frames, out_dir, res_files, wave_in, out_prefix, n_read_beg, n_read_end, bytes_per_second):
+        content = b''.join(frames)
+        logging.info('Saving part %d (%.1f s).' % (cntr, len(content) * 1.0 / bytes_per_second))
 
         res_file = os.path.join(out_dir, 'part.%s.%.3d.wav' % (out_prefix, cntr, ))
         wf = wave.open(res_file, 'wb')
         wf.setnchannels(wave_in.getnchannels())
         wf.setsampwidth(wave_in.getsampwidth())
         wf.setframerate(wave_in.getframerate())
-        wf.writeframes(b''.join(frames))
+        wf.writeframes(content)
         wf.close()
 
-        res_files.append(((n_read_beg * 1.0 / self.BYTES_PER_SECOND, n_read_end * 1.0 / self.BYTES_PER_SECOND), res_file))
+        res_files.append(((n_read_beg * 1.0 / bytes_per_second, n_read_end * 1.0 / bytes_per_second), res_file))
 
 
-
-def main(input_dir, output_dir, v):
+def main(input_dir, pcm_sample_rate, output_dir, v):
     if v:
         logging.basicConfig(level=logging.DEBUG, format=LOGGING_FORMAT)
     else:
@@ -184,9 +170,12 @@ def main(input_dir, output_dir, v):
     vad_cfg = default_vad_cfg
     _download_vad_model_if_not_exists(vad_cfg)
 
-    rs = RecordingSplitter(vad_cfg=vad_cfg, sample_rate=8000)
+    rs = RecordingSplitter(vad_cfg=vad_cfg)
 
-    _split_files(rs, output_dir, to_process)
+    _split_files(rs, output_dir, to_process, pcm_sample_rate)
+
+
+
 
 
 def _download_vad_model_if_not_exists(vad_cfg):
@@ -195,7 +184,6 @@ def _download_vad_model_if_not_exists(vad_cfg):
         'wget https://vystadial.ms.mff.cuni.cz/download/alex/resources/vad'
         '/voip/%s' %
         vad_cfg['model'], ))
-
 
 
 def _find_files_to_split(input_dir):
@@ -208,11 +196,36 @@ def _find_files_to_split(input_dir):
     return to_process
 
 
-def _split_files(rs, output_dir, to_process):
+def _split_files(rs, output_dir, to_process, pcm_sample_rate):
     logging.info('Processing files.')
     for file_name, root in to_process:
-        files = rs.split_pcm(file_name, root, output_dir)
-        _create_session_xml(output_dir, files)
+        file_out_dir = os.path.join(output_dir, root, file_name)
+        files = _split_2chan_pcm(rs, file_name, file_out_dir, pcm_sample_rate, root)
+        _create_session_xml(file_out_dir, files)
+
+
+def _split_2chan_pcm(rs, file_name, out_dir, sample_rate, root):
+    file_path = os.path.join(root, file_name)
+
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
+
+    wav_path_a = os.path.join(out_dir, 'all.a.wav')
+    wav_path_b = os.path.join(out_dir, 'all.b.wav')
+    _convert_to_wav(file_path, sample_rate, wav_path_a, 1)
+    _convert_to_wav(file_path, sample_rate, wav_path_b, 2)
+
+    res_files1 = rs.split_single_channel_wav(wav_path_a, out_dir, "a")
+    res_files2 = rs.split_single_channel_wav(wav_path_b, out_dir, "b")
+
+    res = res_files1 + res_files2
+    res.sort(key=lambda ((tb, te, ), fn, ): tb)
+
+    return res
+
+
+def _convert_to_wav(in_file, sample_rate, out_file, chan):
+    os.system('sox -e signed-integer -b 16 -r %d -c 2 -t raw "%s" "%s" remix %d' % (sample_rate, in_file, out_file, chan, ))
 
 
 def _create_session_xml(output_dir, files):
@@ -227,7 +240,7 @@ def _create_session_xml(output_dir, files):
         <version>{version}</version>
         <input_source type="voip"/>
     </header>
-    %s
+    {turns}
 </dialogue>
     """
 
@@ -241,21 +254,30 @@ def _create_session_xml(output_dir, files):
                                turn_num=i + 1,
                                rec_starttime=ts,
                                rec_endtime=te,
-                               rec_filename=fn)
+                               rec_filename=os.path.basename(fn))
         res_turns.append(turn)
 
     session_fn = os.path.join(output_dir, 'session.xml')
 
     with open(session_fn, 'w') as f_out:
-        f_out.write(res % "\n".join(res_turns))
+        f_out.write(res.format(turns="\n".join(res_turns), host="", date="", system="", version=""))
 
 
 if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser()
+
+    parser.usage = ('Recording Splitter takes an input directory with PCM '
+                   'recordings and splits them using a voice activity detection'
+                   ' mechanism into output dir. It expects the PCM recordings '
+                   'to be 2 channel, where each channel contains one side of a'
+                   'dialog. The input directory structure is preserved in the '
+                   'output directory, where each input file corresponds to an '
+                   'output folder of the same name.')
     parser.add_argument('input_dir')
     parser.add_argument('output_dir')
+    parser.add_argument('--pcm_sample_rate', type=int, default=8000)
     parser.add_argument('-v', default=False, action='store_true')
 
     args = parser.parse_args()
